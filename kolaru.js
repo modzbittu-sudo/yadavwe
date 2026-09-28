@@ -142,15 +142,19 @@ function playGlobalSilence() {
   globalAudioPlayer.play(resource);
 }
 
-function playMicAudioStream(inputStream) {
-  if (inputStream && liveMicStream && inputStream !== liveMicStream) {
-    try { liveMicStream.destroy(); } catch (e) {}
+function stopActiveMedia() {
+  if (globalAudioProcess) {
+    try { globalAudioProcess.kill(); } catch (e) {}
+    globalAudioProcess = null;
   }
-
   if (liveMicStream) {
     try { liveMicStream.destroy(); } catch (e) {}
+    liveMicStream = null;
   }
+}
 
+function playMicAudioStream(inputStream) {
+  stopActiveMedia();
   liveMicStream = inputStream;
   currentAudioMode = 'mic';
 
@@ -160,7 +164,7 @@ function playMicAudioStream(inputStream) {
     inputType: StreamType.Raw,
     inlineVolume: true,
   });
-  const volumeLevel = Number.isFinite(globalVolume) ? Math.max(1.2, Math.min(globalVolume * 0.9, 4.5)) : 2.4;
+  const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.0, Math.min(globalVolume * 1.4, 5.5)) : 3.0;
   resource.volume.setVolume(volumeLevel);
   globalAudioPlayer.play(resource);
 }
@@ -168,9 +172,7 @@ function playMicAudioStream(inputStream) {
 function playGlobalAudio() {
   if (!fs.existsSync('./shared_audio.mp3')) return false;
 
-  if (globalAudioProcess) {
-    try { globalAudioProcess.kill(); } catch(e) {}
-  }
+  stopActiveMedia();
 
   globalAudioProcess = spawn(ffmpeg, [
     '-i', './shared_audio.mp3',
@@ -188,7 +190,8 @@ function playGlobalAudio() {
     inputType: StreamType.Raw,
     inlineVolume: false,
   });
-
+  const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.0, Math.min(globalVolume * 1.2, 5.8)) : 3.2;
+  resource.volume.setVolume(volumeLevel);
   globalAudioPlayer.play(resource);
 
   globalAudioProcess.on('close', () => {
@@ -869,22 +872,22 @@ const server = http.createServer(async (req, res) => {
         const processor = context.createScriptProcessor(2048, 1, 1);
         const output = context.createGain();
 
-        gain.gain.value = Math.max(1.4, (Number(micGainSlider.value) || 1.2) * 1.65);
+        gain.gain.value = Math.max(2.2, (Number(micGainSlider.value) || 1.2) * 2.1);
         lowshelf.type = 'lowshelf';
-        lowshelf.frequency.value = 120;
-        lowshelf.gain.value = 10;
+        lowshelf.frequency.value = 110;
+        lowshelf.gain.value = 12;
         treble.type = 'highshelf';
-        treble.frequency.value = 5500;
-        treble.gain.value = 8;
+        treble.frequency.value = 6000;
+        treble.gain.value = 10;
         shaper.curve = buildDistortionCurve(Number(micDistortionSlider.value) || 8);
         shaper.oversample = '4x';
-        echoDelay.delayTime.value = 0.16;
-        echoGain.gain.value = Math.max(0.12, (Number(micEchoSlider.value) || 0.22) * 1.2);
-        compressor.threshold.value = -14;
+        echoDelay.delayTime.value = 0.14;
+        echoGain.gain.value = Math.max(0.18, (Number(micEchoSlider.value) || 0.22) * 1.35);
+        compressor.threshold.value = -12;
         compressor.knee.value = 18;
-        compressor.ratio.value = 10;
-        compressor.attack.value = 0.006;
-        compressor.release.value = 0.18;
+        compressor.ratio.value = 11;
+        compressor.attack.value = 0.004;
+        compressor.release.value = 0.16;
 
         source.connect(gain);
         gain.connect(lowshelf);
@@ -923,7 +926,7 @@ const server = http.createServer(async (req, res) => {
 
     micGainSlider.addEventListener('input', () => {
       micGainDisplay.textContent = Number(micGainSlider.value).toFixed(1) + 'x';
-      if (micRoute && micRoute.gain) micRoute.gain.gain.value = Math.max(1.4, (Number(micGainSlider.value) || 1.2) * 1.65);
+      if (micRoute && micRoute.gain) micRoute.gain.gain.value = Math.max(2.2, (Number(micGainSlider.value) || 1.2) * 2.1);
     });
 
     micDistortionSlider.addEventListener('input', () => {
@@ -933,7 +936,7 @@ const server = http.createServer(async (req, res) => {
 
     micEchoSlider.addEventListener('input', () => {
       micEchoDisplay.textContent = Number(micEchoSlider.value).toFixed(2);
-      if (micRoute && micRoute.echoGain) micRoute.echoGain.gain.value = Math.max(0.12, (Number(micEchoSlider.value) || 0.22) * 1.2);
+      if (micRoute && micRoute.echoGain) micRoute.echoGain.gain.value = Math.max(0.18, (Number(micEchoSlider.value) || 0.22) * 1.35);
     });
 
     document.getElementById('micEnableBtn').addEventListener('click', startMicRouting);
