@@ -101,16 +101,16 @@ let currentAudioMode = 'silent';
 
 function buildAudioFilters(volume) {
   const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 4;
-  const boostedVolume = Math.max(1.5, safeVolume * 1.15);
+  const boostedVolume = Math.max(1.5, safeVolume * 1.05);
   return [
     `volume=${boostedVolume}`,
-    'bass=g=8',
-    'treble=g=3',
-    'loudnorm=I=-10:TP=-1.8:LRA=7',
-    'aecho=0.10:0.18:220:0.10',
-    'highpass=f=55',
-    'lowpass=f=16000',
-    'volume=1.35'
+    'bass=g=6',
+    'treble=g=2',
+    'loudnorm=I=-14:TP=-1.5:LRA=7',
+    'aecho=0.05:0.10:200:0.08',
+    'highpass=f=80',
+    'lowpass=f=15000',
+    'volume=1.2'
   ].join(',');
 }
 
@@ -160,7 +160,21 @@ function convertMicChunkToStereoPcm(payload) {
   }
   if (payload.length === 0) return null;
 
-  const monoSamples = payload.length / 2;
+  const sampleCount = payload.length / 2;
+  if (sampleCount % 2 === 0 && payload.length % 4 === 0) {
+    let isStereo = true;
+    for (let i = 0; i < payload.length / 2; i += 2) {
+      const left = payload.readInt16LE(i * 2);
+      const right = payload.readInt16LE(i * 2 + 2);
+      if (left !== right) {
+        isStereo = false;
+        break;
+      }
+    }
+    if (isStereo) return payload;
+  }
+
+  const monoSamples = sampleCount;
   const stereo = Buffer.alloc(monoSamples * 4);
 
   for (let i = 0; i < monoSamples; i++) {
@@ -892,6 +906,8 @@ const server = http.createServer(async (req, res) => {
         const compressor = context.createDynamicsCompressor();
         const processor = context.createScriptProcessor(2048, 1, 1);
         const output = context.createGain();
+        const silentMonitor = context.createGain();
+        silentMonitor.gain.value = 0;
 
         gain.gain.value = Math.max(2.2, (Number(micGainSlider.value) || 1.2) * 2.1);
         lowshelf.type = 'lowshelf';
@@ -899,16 +915,16 @@ const server = http.createServer(async (req, res) => {
         lowshelf.gain.value = 12;
         treble.type = 'highshelf';
         treble.frequency.value = 6000;
-        treble.gain.value = 10;
+        treble.gain.value = 8;
         shaper.curve = buildDistortionCurve(Number(micDistortionSlider.value) || 8);
         shaper.oversample = '4x';
-        echoDelay.delayTime.value = 0.14;
-        echoGain.gain.value = Math.max(0.18, (Number(micEchoSlider.value) || 0.22) * 1.35);
-        compressor.threshold.value = -12;
+        echoDelay.delayTime.value = 0.12;
+        echoGain.gain.value = Math.max(0.08, (Number(micEchoSlider.value) || 0.22) * 1.2);
+        compressor.threshold.value = -10;
         compressor.knee.value = 18;
-        compressor.ratio.value = 11;
+        compressor.ratio.value = 8;
         compressor.attack.value = 0.004;
-        compressor.release.value = 0.16;
+        compressor.release.value = 0.12;
 
         source.connect(gain);
         gain.connect(lowshelf);
@@ -917,19 +933,24 @@ const server = http.createServer(async (req, res) => {
         shaper.connect(compressor);
         compressor.connect(output);
         output.connect(processor);
+        processor.connect(silentMonitor);
+        silentMonitor.connect(context.destination);
         shaper.connect(echoDelay);
         echoDelay.connect(echoGain);
         echoGain.connect(compressor);
 
         processor.onaudioprocess = (event) => {
-          const input = event.inputBuffer.getChannelData(0);
-          const pcm = new Int16Array(input.length);
-          for (let i = 0; i < input.length; i++) {
-            const value = Math.max(-1, Math.min(1, input[i]));
-            pcm[i] = value * 32767;
+          const left = event.inputBuffer.getChannelData(0);
+          const right = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : left;
+          const stereo = new Int16Array(left.length * 2);
+          for (let i = 0; i < left.length; i++) {
+            const l = Math.max(-1, Math.min(1, left[i]));
+            const r = Math.max(-1, Math.min(1, right[i]));
+            stereo[i * 2] = l * 32767;
+            stereo[i * 2 + 1] = r * 32767;
           }
           if (socket.readyState === WebSocket.OPEN) {
-            const chunk = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
+            const chunk = stereo.buffer.slice(stereo.byteOffset, stereo.byteOffset + stereo.byteLength);
             socket.send(chunk);
           }
         };
