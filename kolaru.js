@@ -153,6 +153,26 @@ function stopActiveMedia() {
   }
 }
 
+function convertMicChunkToStereoPcm(payload) {
+  if (!Buffer.isBuffer(payload) || payload.length === 0) return null;
+  if (payload.length % 2 !== 0) {
+    payload = payload.subarray(0, payload.length - 1);
+  }
+  if (payload.length === 0) return null;
+
+  const monoSamples = payload.length / 2;
+  const stereo = Buffer.alloc(monoSamples * 4);
+
+  for (let i = 0; i < monoSamples; i++) {
+    const sample = payload.readInt16LE(i * 2);
+    const safeSample = Math.max(-32768, Math.min(32767, sample));
+    stereo.writeInt16LE(safeSample, i * 4);
+    stereo.writeInt16LE(safeSample, i * 4 + 2);
+  }
+
+  return stereo;
+}
+
 function playMicAudioStream(inputStream) {
   stopActiveMedia();
   liveMicStream = inputStream;
@@ -493,18 +513,8 @@ function attachMicSocket(ws) {
         : Buffer.from(message || []);
 
     if (payload.length > 0 && micInput.writable) {
-      try {
-        const mono = new Int16Array(payload.buffer, payload.byteOffset, payload.byteLength / 2);
-        const stereo = Buffer.alloc(mono.length * 4);
-        for (let i = 0; i < mono.length; i++) {
-          const sample = Math.max(-32768, Math.min(32767, mono[i]));
-          stereo.writeInt16LE(sample, i * 4);
-          stereo.writeInt16LE(sample, i * 4 + 2);
-        }
-        micInput.write(stereo);
-      } catch (error) {
-        micInput.write(payload);
-      }
+      const stereoPcm = convertMicChunkToStereoPcm(payload);
+      micInput.write(stereoPcm || payload);
     }
   });
 
