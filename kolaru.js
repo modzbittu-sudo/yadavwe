@@ -90,24 +90,21 @@ if (tokens.length === 0) {
 }
 
 // --- SINGLE GLOBAL AUDIO PLAYER (perfect sync for all bots) ---
-let globalVolume = 8.0;
+let globalVolume = 5.0;
 let globalMute = false;
 let globalDeaf = false;
 let globalAudioProcess = null;
 
 function buildAudioFilters(volume) {
-  const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 8;
+  const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 5;
   return [
     `volume=${safeVolume}`,
-    'bass=g=10',
-    'treble=g=4',
-    'equalizer=f=1800:width_type=q:width=1.5:g=4',
-    'compand=0.02:0.2:6:3:0',
-    'acrusher=level_in=16:level_out=10:bits=6:mode=log:mix=0.45',
-    'aecho=0.5:0.7:600:0.35',
-    'highpass=f=60',
-    'lowpass=f=14000',
-    'volume=1.3'
+    'bass=g=6',
+    'treble=g=3',
+    'aecho=0.4:0.6:300:0.25',
+    'highpass=f=50',
+    'lowpass=f=15000',
+    'volume=1.2'
   ].join(',');
 }
 
@@ -507,9 +504,9 @@ const server = http.createServer(async (req, res) => {
     </div>
     <div style="margin-bottom: 16px;">
       <label style="display:flex; justify-content:space-between; margin-bottom:8px; font-weight:bold; color:#f43f5e;">
-        Volume Multiplier: <span id="volDisplay">8.0x</span>
+        Volume Multiplier: <span id="volDisplay">5.0x</span>
       </label>
-      <input type="range" id="volSlider" min="0" max="1000" step="0.1" value="8" style="width:100%; accent-color:#f43f5e; cursor:pointer;" />
+      <input type="range" id="volSlider" min="0" max="1000" step="0.1" value="5" style="width:100%; accent-color:#f43f5e; cursor:pointer;" />
     </div>
     <div class="actions">
       <button id="uploadPlayBtn" style="background:#8b5cf6;color:#fff;">Upload & Play to All</button>
