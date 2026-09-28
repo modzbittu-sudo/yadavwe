@@ -1,7 +1,8 @@
+const fs = require('node:fs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseTokenList, addTokenToList, persistTokenList } = require('../token-store');
+const { parseTokenList, addTokenToList, persistTokenList, loadTokenFile } = require('../token-store');
 
 test('parseTokenList reads comma and newline separated tokens', () => {
   const tokens = parseTokenList('abc, def\nghi, jkl');
@@ -28,4 +29,15 @@ test('persistTokenList writes BOT_TOKENS using comma list', () => {
   const tokens = ['token1', 'token2'];
   const output = persistTokenList(filePath, tokens);
   assert.equal(output, 'token1,token2');
+});
+
+test('loadTokenFile reads newline and comma separated tokens from a txt file', () => {
+  const filePath = 'test/.tokens.mock.txt';
+  fs.writeFileSync(filePath, 'tokenA\n tokenB, tokenC\n');
+
+  try {
+    assert.deepEqual(loadTokenFile(filePath), ['tokenA', 'tokenB', 'tokenC']);
+  } finally {
+    fs.unlinkSync(filePath);
+  }
 });

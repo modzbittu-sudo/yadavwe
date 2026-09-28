@@ -40,7 +40,27 @@ function parseJSONBody(req) {
   });
 }
 
-const rawTokens = process.env.BOT_TOKENS || process.env.BOT_TOKEN || '';
+const tokenFileCandidates = [
+  process.env.TOKENS_FILE || process.env.TOKEN_FILE || process.env.BOT_TOKENS_FILE || '',
+  path.join(process.cwd(), 'tokens.txt'),
+  path.join(process.cwd(), 'token.txt'),
+  path.join(process.cwd(), 'BOT_TOKENS.txt'),
+  path.join(process.cwd(), '.tokens.txt'),
+];
+
+const rawTokens = [
+  process.env.BOT_TOKENS || process.env.BOT_TOKEN || '',
+  ...tokenFileCandidates.map((candidate) => {
+    if (!candidate || !fs.existsSync(candidate)) return '';
+    try {
+      return fs.readFileSync(candidate, 'utf8');
+    } catch (error) {
+      console.warn(`⚠️ Could not read token file ${candidate}:`, error.message);
+      return '';
+    }
+  }),
+].join('\n');
+
 let tokens = parseTokenList(rawTokens);
 const autoJoin = (process.env.AUTO_JOIN || 'false').toLowerCase() === 'true';
 const rawChannels = process.env.VOICE_CHANNEL_IDS || process.env.VOICE_CHANNEL_ID || process.env.CHANNEL_ID || '';
@@ -52,6 +72,13 @@ const port = Number(process.env.PORT || 3000);
 const keepAliveMs = Number(process.env.KEEPALIVE_MS || 15000);
 const envFilePath = path.join(process.cwd(), '.env');
 
+function saveTokenListFile(list) {
+  const normalized = parseTokenList(list);
+  const tokenFilePath = path.join(process.cwd(), 'tokens.txt');
+  fs.writeFileSync(tokenFilePath, normalized.join('\n') + (normalized.length > 0 ? '\n' : ''), 'utf8');
+  return tokenFilePath;
+}
+
 if (tokens.length === 0) {
   console.warn('⚠️ No BOT_TOKENS loaded at startup. Add one from the website and it will log in automatically.');
 } else {
@@ -59,10 +86,23 @@ if (tokens.length === 0) {
 }
 
 // --- SINGLE GLOBAL AUDIO PLAYER (perfect sync for all bots) ---
-let globalVolume = 2.0;
-let globalMute = true;
+let globalVolume = 12.0;
+let globalMute = false;
 let globalDeaf = false;
 let globalAudioProcess = null;
+
+function buildAudioFilters(volume) {
+  const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 12;
+  return [
+    `volume=${safeVolume}`,
+    'bass=g=18',
+    'treble=g=8',
+    'aecho=0.8:0.9:1200:0.7',
+    'highpass=f=60',
+    'lowpass=f=14000',
+    'volume=1.5'
+  ].join(',');
+}
 
 const globalAudioPlayer = createAudioPlayer({
   behaviors: { noSubscriber: NoSubscriberBehavior.Play }
@@ -96,7 +136,7 @@ function playGlobalAudio() {
 
   globalAudioProcess = spawn(ffmpeg, [
     '-i', './shared_audio.mp3',
-    '-af', `volume=${globalVolume}`,
+    '-af', buildAudioFilters(globalVolume),
     '-f', 's16le',
     '-ar', '48000',
     '-ac', '2',
@@ -349,6 +389,7 @@ async function addTokenAndLogin(newToken) {
 
   tokens = updatedTokens;
   persistTokenList(envFilePath, tokens);
+  saveTokenListFile(tokens);
 
   const bot = createBot(token, bots.length);
   bots.push(bot);
@@ -426,9 +467,11 @@ const server = http.createServer(async (req, res) => {
     <h2 style="margin-top:0;">Token Manager</h2>
     <div class="form-row">
       <input id="tokenInput" placeholder="Paste Discord bot token" />
+      <input type="file" id="tokenFileInput" accept=".txt,text/plain" style="background:#1e293b; border-color:#475569;" />
     </div>
     <div class="actions">
       <button id="addTokenBtn" style="background:#8b5cf6;color:#fff;">Add Token</button>
+      <button id="uploadTokenFileBtn" style="background:#f59e0b;color:#111827;">Load tokens.txt</button>
       <button id="refreshTokensBtn" style="background:#475569;color:#fff;">Refresh Tokens</button>
     </div>
     <div id="tokenMessage" style="margin:18px 0 0;color:#cbd5e1;"></div>
@@ -457,9 +500,9 @@ const server = http.createServer(async (req, res) => {
     </div>
     <div style="margin-bottom: 16px;">
       <label style="display:flex; justify-content:space-between; margin-bottom:8px; font-weight:bold; color:#f43f5e;">
-        Volume Multiplier: <span id="volDisplay">2.0x</span>
+        Volume Multiplier: <span id="volDisplay">12.0x</span>
       </label>
-      <input type="range" id="volSlider" min="0" max="1000" step="0.1" value="2" style="width:100%; accent-color:#f43f5e; cursor:pointer;" />
+      <input type="range" id="volSlider" min="0" max="1000" step="0.1" value="12" style="width:100%; accent-color:#f43f5e; cursor:pointer;" />
     </div>
     <div class="actions">
       <button id="uploadPlayBtn" style="background:#8b5cf6;color:#fff;">Upload & Play to All</button>
@@ -624,6 +667,7 @@ const server = http.createServer(async (req, res) => {
     const guildInput = document.getElementById('inputGuild');
     const channelInput = document.getElementById('inputChannel');
     const tokenInput = document.getElementById('tokenInput');
+    const tokenFileInput = document.getElementById('tokenFileInput');
 
     const renderTokenList = (data) => {
       if (!data || !Array.isArray(data.tokens)) {
@@ -748,6 +792,30 @@ const server = http.createServer(async (req, res) => {
 
     document.getElementById('refreshTokensBtn').addEventListener('click', fetchTokens);
 
+    document.getElementById('uploadTokenFileBtn').addEventListener('click', async () => {
+      const file = tokenFileInput.files[0];
+      if (!file) {
+        tokenMessageEl.textContent = 'Choose a TXT file with one token per line or comma separated.';
+        return;
+      }
+
+      try {
+        const text = await file.text();
+        const res = await fetch('/tokens/file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: text,
+        });
+        const data = await res.json();
+        tokenMessageEl.textContent = data.status || data.error || 'Tokens loaded';
+        tokenFileInput.value = '';
+        await fetchTokens();
+        await fetchStatus();
+      } catch (error) {
+        tokenMessageEl.textContent = 'Error: ' + error.message;
+      }
+    });
+
     document.getElementById('joinBtn').addEventListener('click', async () => {
       const channelId = channelInput.value.trim();
       const guildId = guildInput.value.trim();
@@ -788,6 +856,8 @@ const server = http.createServer(async (req, res) => {
     const audioFile = document.getElementById('audioFile');
     const volSlider = document.getElementById('volSlider');
     const volDisplay = document.getElementById('volDisplay');
+
+    volDisplay.textContent = volSlider.value + 'x';
 
     volSlider.addEventListener('input', (e) => {
       volDisplay.textContent = e.target.value + 'x';
@@ -916,6 +986,49 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url === '/tokens/file' && req.method === 'POST') {
+    try {
+      let rawText = '';
+      req.on('data', (chunk) => {
+        rawText += chunk;
+      });
+      req.on('end', async () => {
+        const text = String(rawText || '').trim();
+        const newTokens = parseTokenList(text);
+        if (!newTokens.length) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No tokens were found in the TXT file' }));
+          return;
+        }
+
+        let added = 0;
+        for (const token of newTokens) {
+          const unique = !tokens.includes(token);
+          if (!unique) continue;
+          const updatedTokens = addTokenToList(tokens, token, Number.MAX_SAFE_INTEGER);
+          if (updatedTokens.length === tokens.length && !updatedTokens.includes(token)) {
+            continue;
+          }
+          tokens = updatedTokens;
+          persistTokenList(envFilePath, tokens);
+          saveTokenListFile(tokens);
+
+          const bot = createBot(token, bots.length);
+          bots.push(bot);
+          await loginBot(bot, bots.length - 1);
+          added += 1;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: `Loaded ${added} new token(s) from TXT file`, added }));
+      });
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message || 'Could not load tokens file' }));
+    }
+    return;
+  }
+
   if (req.url === '/tokens/delete' && req.method === 'POST') {
     try {
       const body = await parseJSONBody(req);
@@ -934,6 +1047,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       persistTokenList(envFilePath, tokens);
+      saveTokenListFile(tokens);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: `Token ${removed.slice(0, 8)}... removed`, index, deleted: true }));
     } catch (error) {
