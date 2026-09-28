@@ -99,14 +99,14 @@ function buildAudioFilters(volume) {
   const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 5;
   return [
     `volume=${safeVolume}`,
-    'bass=g=3',
-    'treble=g=2',
-    'loudnorm=I=-9:TP=-1.2:LRA=7',
-    'overdrive=4:0.15',
-    'aecho=0.12:0.18:250:0.12',
-    'highpass=f=60',
-    'lowpass=f=15000',
-    'volume=1.22'
+    'bass=g=8',
+    'treble=g=3',
+    'loudnorm=I=-7:TP=-1.0:LRA=7',
+    'overdrive=6:0.22',
+    'aecho=0.18:0.24:320:0.18',
+    'highpass=f=55',
+    'lowpass=f=16000',
+    'volume=1.26'
   ].join(',');
 }
 
