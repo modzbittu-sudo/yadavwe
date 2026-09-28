@@ -902,6 +902,10 @@ const server = http.createServer(async (req, res) => {
         });
 
         const context = new (window.AudioContext || window.webkitAudioContext)();
+        if (context.state === 'suspended') {
+          await context.resume();
+        }
+
         const source = context.createMediaStreamSource(stream);
         const gain = context.createGain();
         const lowshelf = context.createBiquadFilter();
@@ -910,7 +914,7 @@ const server = http.createServer(async (req, res) => {
         const echoDelay = context.createDelay();
         const echoGain = context.createGain();
         const compressor = context.createDynamicsCompressor();
-        const processor = context.createScriptProcessor(2048, 1, 1);
+        const processor = context.createScriptProcessor(2048, 1, 2);
         const output = context.createGain();
         const silentMonitor = context.createGain();
         silentMonitor.gain.value = 0;
