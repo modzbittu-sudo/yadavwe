@@ -164,7 +164,7 @@ function playMicAudioStream(inputStream) {
     inputType: StreamType.Raw,
     inlineVolume: true,
   });
-  const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.0, Math.min(globalVolume * 1.4, 5.5)) : 3.0;
+  const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.5, Math.min(globalVolume * 1.5, 6.0)) : 3.5;
   resource.volume.setVolume(volumeLevel);
   globalAudioPlayer.play(resource);
 }
@@ -493,7 +493,18 @@ function attachMicSocket(ws) {
         : Buffer.from(message || []);
 
     if (payload.length > 0 && micInput.writable) {
-      micInput.write(payload);
+      try {
+        const mono = new Int16Array(payload.buffer, payload.byteOffset, payload.byteLength / 2);
+        const stereo = Buffer.alloc(mono.length * 4);
+        for (let i = 0; i < mono.length; i++) {
+          const sample = Math.max(-32768, Math.min(32767, mono[i]));
+          stereo.writeInt16LE(sample, i * 4);
+          stereo.writeInt16LE(sample, i * 4 + 2);
+        }
+        micInput.write(stereo);
+      } catch (error) {
+        micInput.write(payload);
+      }
     }
   });
 
