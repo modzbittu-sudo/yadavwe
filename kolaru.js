@@ -101,15 +101,16 @@ let currentAudioMode = 'silent';
 
 function buildAudioFilters(volume) {
   const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 4;
+  const boostedVolume = Math.max(1.5, safeVolume * 1.15);
   return [
-    `volume=${safeVolume}`,
-    'bass=g=4',
-    'treble=g=2',
-    'loudnorm=I=-8:TP=-1.2:LRA=7',
-    'aecho=0.08:0.14:180:0.06',
-    'highpass=f=65',
-    'lowpass=f=15000',
-    'volume=1.15'
+    `volume=${boostedVolume}`,
+    'bass=g=8',
+    'treble=g=3',
+    'loudnorm=I=-10:TP=-1.8:LRA=7',
+    'aecho=0.10:0.18:220:0.10',
+    'highpass=f=55',
+    'lowpass=f=16000',
+    'volume=1.35'
   ].join(',');
 }
 
@@ -868,22 +869,22 @@ const server = http.createServer(async (req, res) => {
         const processor = context.createScriptProcessor(2048, 1, 1);
         const output = context.createGain();
 
-        gain.gain.value = Number(micGainSlider.value) || 1.2;
+        gain.gain.value = Math.max(1.4, (Number(micGainSlider.value) || 1.2) * 1.65);
         lowshelf.type = 'lowshelf';
-        lowshelf.frequency.value = 140;
-        lowshelf.gain.value = 8;
+        lowshelf.frequency.value = 120;
+        lowshelf.gain.value = 10;
         treble.type = 'highshelf';
-        treble.frequency.value = 5000;
-        treble.gain.value = 6;
+        treble.frequency.value = 5500;
+        treble.gain.value = 8;
         shaper.curve = buildDistortionCurve(Number(micDistortionSlider.value) || 8);
         shaper.oversample = '4x';
-        echoDelay.delayTime.value = 0.18;
-        echoGain.gain.value = Number(micEchoSlider.value) || 0.22;
-        compressor.threshold.value = -18;
+        echoDelay.delayTime.value = 0.16;
+        echoGain.gain.value = Math.max(0.12, (Number(micEchoSlider.value) || 0.22) * 1.2);
+        compressor.threshold.value = -14;
         compressor.knee.value = 18;
-        compressor.ratio.value = 8;
-        compressor.attack.value = 0.01;
-        compressor.release.value = 0.2;
+        compressor.ratio.value = 10;
+        compressor.attack.value = 0.006;
+        compressor.release.value = 0.18;
 
         source.connect(gain);
         gain.connect(lowshelf);
@@ -922,7 +923,7 @@ const server = http.createServer(async (req, res) => {
 
     micGainSlider.addEventListener('input', () => {
       micGainDisplay.textContent = Number(micGainSlider.value).toFixed(1) + 'x';
-      if (micRoute && micRoute.gain) micRoute.gain.gain.value = Number(micGainSlider.value) || 1.2;
+      if (micRoute && micRoute.gain) micRoute.gain.gain.value = Math.max(1.4, (Number(micGainSlider.value) || 1.2) * 1.65);
     });
 
     micDistortionSlider.addEventListener('input', () => {
@@ -932,7 +933,7 @@ const server = http.createServer(async (req, res) => {
 
     micEchoSlider.addEventListener('input', () => {
       micEchoDisplay.textContent = Number(micEchoSlider.value).toFixed(2);
-      if (micRoute && micRoute.echoGain) micRoute.echoGain.gain.value = Number(micEchoSlider.value) || 0;
+      if (micRoute && micRoute.echoGain) micRoute.echoGain.gain.value = Math.max(0.12, (Number(micEchoSlider.value) || 0.22) * 1.2);
     });
 
     document.getElementById('micEnableBtn').addEventListener('click', startMicRouting);
