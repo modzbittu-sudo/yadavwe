@@ -222,7 +222,7 @@ function playGlobalAudio() {
 
   const resource = createAudioResource(globalAudioProcess.stdout, {
     inputType: StreamType.Raw,
-    inlineVolume: false,
+    inlineVolume: true,
   });
   const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.0, Math.min(globalVolume * 1.2, 5.8)) : 3.2;
   resource.volume.setVolume(volumeLevel);
