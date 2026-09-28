@@ -123,6 +123,12 @@ globalAudioPlayer.on('error', error => {
   playGlobalSilence();
 });
 
+function applyInlineVolume(resource, volume) {
+  if (!resource || !resource.volume) return;
+  const safeVolume = Number.isFinite(volume) ? Math.max(0.0, volume) : 1.0;
+  resource.volume.setVolume(safeVolume);
+}
+
 function playGlobalSilence() {
   if (globalAudioProcess) {
     try { globalAudioProcess.kill(); } catch(e) {}
@@ -138,7 +144,7 @@ function playGlobalSilence() {
     inputType: StreamType.Raw,
     inlineVolume: true,
   });
-  resource.volume.setVolume(0.0);
+  applyInlineVolume(resource, 0.0);
   globalAudioPlayer.play(resource);
 }
 
@@ -199,7 +205,7 @@ function playMicAudioStream(inputStream) {
     inlineVolume: true,
   });
   const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.5, Math.min(globalVolume * 1.5, 6.0)) : 3.5;
-  resource.volume.setVolume(volumeLevel);
+  applyInlineVolume(resource, volumeLevel);
   globalAudioPlayer.play(resource);
 }
 
@@ -225,7 +231,7 @@ function playGlobalAudio() {
     inlineVolume: true,
   });
   const volumeLevel = Number.isFinite(globalVolume) ? Math.max(2.0, Math.min(globalVolume * 1.2, 5.8)) : 3.2;
-  resource.volume.setVolume(volumeLevel);
+  applyInlineVolume(resource, volumeLevel);
   globalAudioPlayer.play(resource);
 
   globalAudioProcess.on('close', () => {
