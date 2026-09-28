@@ -6,6 +6,7 @@ const { Readable, PassThrough } = require('stream');
 const { spawn } = require('child_process');
 const ffmpeg = require('ffmpeg-static');
 const http = require('http');
+const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 const { parseTokenList, addTokenToList, persistTokenList } = require('./token-store');
@@ -94,6 +95,9 @@ let globalVolume = 4.0;
 let globalMute = false;
 let globalDeaf = false;
 let globalAudioProcess = null;
+let liveMicStream = null;
+let liveMicSocket = null;
+let currentAudioMode = 'silent';
 
 function buildAudioFilters(volume) {
   const safeVolume = Number.isFinite(volume) && volume > 0 ? volume : 4;
@@ -123,12 +127,40 @@ function playGlobalSilence() {
     try { globalAudioProcess.kill(); } catch(e) {}
     globalAudioProcess = null;
   }
+  if (liveMicStream) {
+    try { liveMicStream.end(); } catch (e) {}
+    liveMicStream = null;
+  }
+  currentAudioMode = 'silent';
   const silentStream = createSilentStream();
   const resource = createAudioResource(silentStream, {
     inputType: StreamType.Raw,
     inlineVolume: true,
   });
   resource.volume.setVolume(0.0);
+  globalAudioPlayer.play(resource);
+}
+
+function playMicAudioStream(inputStream) {
+  if (inputStream && liveMicStream && inputStream !== liveMicStream) {
+    try { liveMicStream.destroy(); } catch (e) {}
+  }
+
+  if (liveMicStream) {
+    try { liveMicStream.destroy(); } catch (e) {}
+  }
+
+  liveMicStream = inputStream;
+  currentAudioMode = 'mic';
+
+  if (!liveMicStream) return;
+
+  const resource = createAudioResource(liveMicStream, {
+    inputType: StreamType.Raw,
+    inlineVolume: true,
+  });
+  const volumeLevel = Number.isFinite(globalVolume) ? Math.max(1.2, Math.min(globalVolume * 0.9, 4.5)) : 2.4;
+  resource.volume.setVolume(volumeLevel);
   globalAudioPlayer.play(resource);
 }
 
@@ -435,6 +467,57 @@ if (bots.length > 0) {
 }
 console.log(`🧠 Health endpoint enabled on port ${port}`);
 
+const micWss = new WebSocket.Server({ noServer: true });
+
+function attachMicSocket(ws) {
+  if (liveMicSocket && liveMicSocket !== ws) {
+    try { liveMicSocket.close(); } catch (error) {}
+  }
+
+  const micInput = new PassThrough();
+  liveMicSocket = ws;
+  liveMicStream = micInput;
+  currentAudioMode = 'mic';
+
+  playMicAudioStream(micInput);
+
+  ws.on('message', (message) => {
+    const payload = message instanceof ArrayBuffer
+      ? Buffer.from(new Uint8Array(message))
+      : Buffer.isBuffer(message)
+        ? message
+        : Buffer.from(message || []);
+
+    if (payload.length > 0 && micInput.writable) {
+      micInput.write(payload);
+    }
+  });
+
+  ws.on('close', () => {
+    if (liveMicSocket === ws) {
+      liveMicSocket = null;
+      if (liveMicStream) {
+        try { liveMicStream.end(); } catch (error) {}
+      }
+      liveMicStream = null;
+      currentAudioMode = 'silent';
+      playGlobalSilence();
+    }
+  });
+
+  ws.on('error', () => {
+    if (liveMicSocket === ws) {
+      liveMicSocket = null;
+      if (liveMicStream) {
+        try { liveMicStream.end(); } catch (error) {}
+      }
+      liveMicStream = null;
+      currentAudioMode = 'silent';
+      playGlobalSilence();
+    }
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.url === '/' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -488,6 +571,7 @@ const server = http.createServer(async (req, res) => {
     <div class="form-row">
       <input id="inputGuild" placeholder="Guild ID (optional)" />
       <input id="inputChannel" placeholder="Voice Channel ID" />
+      <input id="joinCountInput" type="number" min="1" max="50" step="1" value="1" placeholder="Bots to join VC" />
     </div>
     <div class="actions">
       <button id="joinBtn" style="background:#22c55e;color:#0f172a;">Join Channel</button>
@@ -496,6 +580,29 @@ const server = http.createServer(async (req, res) => {
       <button id="refresh" style="background:#475569;color:#fff;">Refresh Status</button>
     </div>
     <div id="message" style="margin:18px 0 0;color:#cbd5e1;"></div>
+  </div>
+
+  <div class="card" style="margin-bottom: 24px;">
+    <h2 style="margin-top:0; color: #fbbf24;">🎙️ Live Mic Routing</h2>
+    <div class="form-row">
+      <select id="micDeviceSelect" style="width:100%; max-width:420px; border:1px solid #334155; border-radius:12px; padding:12px 14px; background:#0f172a; color:#e2e8f0; margin-top:10px;">
+        <option value="">Default microphone</option>
+      </select>
+      <button id="micListBtn" style="background:#475569;color:#fff; max-width:220px;">Refresh Mics</button>
+    </div>
+    <div class="form-row">
+      <label style="display:flex; justify-content:space-between; margin-bottom:8px; font-weight:bold; color:#fbbf24;">Mic gain <span id="micGainDisplay">1.2x</span></label>
+      <input id="micGainSlider" type="range" min="0.5" max="4" step="0.1" value="1.2" style="width:100%; accent-color:#fbbf24; cursor:pointer;" />
+      <label style="display:flex; justify-content:space-between; margin-bottom:8px; font-weight:bold; color:#fbbf24;">Distortion <span id="micDistortionDisplay">8</span></label>
+      <input id="micDistortionSlider" type="range" min="0" max="30" step="1" value="8" style="width:100%; accent-color:#fbbf24; cursor:pointer;" />
+      <label style="display:flex; justify-content:space-between; margin-bottom:8px; font-weight:bold; color:#fbbf24;">Echo <span id="micEchoDisplay">0.22</span></label>
+      <input id="micEchoSlider" type="range" min="0" max="0.8" step="0.01" value="0.22" style="width:100%; accent-color:#fbbf24; cursor:pointer;" />
+    </div>
+    <div class="actions">
+      <button id="micEnableBtn" style="background:#f59e0b;color:#111827;">Allow Mic & Route</button>
+      <button id="micStopBtn" style="background:#ef4444;color:#fff;">Stop Mic</button>
+    </div>
+    <div id="micMessage" style="margin:18px 0 0;color:#cbd5e1;"></div>
   </div>
 
   <div class="card" style="margin-bottom: 24px;">
@@ -671,8 +778,166 @@ const server = http.createServer(async (req, res) => {
     const botsEl = document.getElementById('bots');
     const guildInput = document.getElementById('inputGuild');
     const channelInput = document.getElementById('inputChannel');
+    const joinCountInput = document.getElementById('joinCountInput');
     const tokenInput = document.getElementById('tokenInput');
     const tokenFileInput = document.getElementById('tokenFileInput');
+    const micDeviceSelect = document.getElementById('micDeviceSelect');
+    const micGainSlider = document.getElementById('micGainSlider');
+    const micDistortionSlider = document.getElementById('micDistortionSlider');
+    const micEchoSlider = document.getElementById('micEchoSlider');
+    const micGainDisplay = document.getElementById('micGainDisplay');
+    const micDistortionDisplay = document.getElementById('micDistortionDisplay');
+    const micEchoDisplay = document.getElementById('micEchoDisplay');
+    const micMessageEl = document.getElementById('micMessage');
+
+    const buildDistortionCurve = (amount) => {
+      const samples = 4096;
+      const curve = new Float32Array(samples);
+      const level = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+      for (let i = 0; i < samples; i++) {
+        const x = (i / (samples - 1)) * 2 - 1;
+        curve[i] = ((Math.PI * level) * x) / (Math.PI + Math.abs(level * x));
+      }
+      return curve;
+    };
+
+    let micRoute = null;
+
+    const refreshMicrophoneDevices = async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter((device) => device.kind === 'audioinput');
+        micDeviceSelect.innerHTML = '<option value="">Default microphone</option>' + audioInputs.map((device) => '<option value="' + device.deviceId + '">' + (device.label || 'Microphone') + '</option>').join('');
+      } catch (error) {
+        micMessageEl.textContent = 'Mic devices could not be listed; using default microphone.';
+      }
+    };
+
+    const stopMicRouting = () => {
+      if (micRoute && micRoute.stream) {
+        micRoute.stream.getTracks().forEach((track) => track.stop());
+      }
+      if (micRoute && micRoute.socket && micRoute.socket.readyState === WebSocket.OPEN) {
+        micRoute.socket.close();
+      }
+      if (micRoute && micRoute.context && micRoute.context.close) {
+        micRoute.context.close();
+      }
+      micRoute = null;
+      micMessageEl.textContent = 'Microphone stream stopped.';
+    };
+
+    const startMicRouting = async () => {
+      if (micRoute) {
+        stopMicRouting();
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        micMessageEl.textContent = 'This browser cannot access microphone devices.';
+        return;
+      }
+
+      try {
+        const socketUrl = (window.location.protocol === 'https:' ? 'wss' : 'ws') + '://' + window.location.host + '/mic';
+        const socket = new WebSocket(socketUrl);
+        socket.binaryType = 'arraybuffer';
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: micDeviceSelect.value ? { exact: micDeviceSelect.value } : undefined,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          }
+        });
+
+        await new Promise((resolve) => {
+          socket.addEventListener('open', resolve, { once: true });
+        });
+
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        const source = context.createMediaStreamSource(stream);
+        const gain = context.createGain();
+        const lowshelf = context.createBiquadFilter();
+        const treble = context.createBiquadFilter();
+        const shaper = context.createWaveShaper();
+        const echoDelay = context.createDelay();
+        const echoGain = context.createGain();
+        const compressor = context.createDynamicsCompressor();
+        const processor = context.createScriptProcessor(2048, 1, 1);
+        const output = context.createGain();
+
+        gain.gain.value = Number(micGainSlider.value) || 1.2;
+        lowshelf.type = 'lowshelf';
+        lowshelf.frequency.value = 140;
+        lowshelf.gain.value = 8;
+        treble.type = 'highshelf';
+        treble.frequency.value = 5000;
+        treble.gain.value = 6;
+        shaper.curve = buildDistortionCurve(Number(micDistortionSlider.value) || 8);
+        shaper.oversample = '4x';
+        echoDelay.delayTime.value = 0.18;
+        echoGain.gain.value = Number(micEchoSlider.value) || 0.22;
+        compressor.threshold.value = -18;
+        compressor.knee.value = 18;
+        compressor.ratio.value = 8;
+        compressor.attack.value = 0.01;
+        compressor.release.value = 0.2;
+
+        source.connect(gain);
+        gain.connect(lowshelf);
+        lowshelf.connect(treble);
+        treble.connect(shaper);
+        shaper.connect(compressor);
+        compressor.connect(output);
+        output.connect(processor);
+        shaper.connect(echoDelay);
+        echoDelay.connect(echoGain);
+        echoGain.connect(compressor);
+
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(input.length);
+          for (let i = 0; i < input.length; i++) {
+            const value = Math.max(-1, Math.min(1, input[i]));
+            pcm[i] = value * 32767;
+          }
+          if (socket.readyState === WebSocket.OPEN) {
+            const chunk = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
+            socket.send(chunk);
+          }
+        };
+
+        micRoute = { context, stream, socket, gain, shaper, echoGain };
+        micMessageEl.textContent = 'Microphone routed to the selected VC. Voice is live.';
+      } catch (error) {
+        micMessageEl.textContent = 'Mic permission denied or unavailable: ' + (error.message || error);
+      }
+    };
+
+    micGainDisplay.textContent = Number(micGainSlider.value).toFixed(1) + 'x';
+    micDistortionDisplay.textContent = String(micDistortionSlider.value);
+    micEchoDisplay.textContent = Number(micEchoSlider.value).toFixed(2);
+
+    micGainSlider.addEventListener('input', () => {
+      micGainDisplay.textContent = Number(micGainSlider.value).toFixed(1) + 'x';
+      if (micRoute && micRoute.gain) micRoute.gain.gain.value = Number(micGainSlider.value) || 1.2;
+    });
+
+    micDistortionSlider.addEventListener('input', () => {
+      micDistortionDisplay.textContent = String(micDistortionSlider.value);
+      if (micRoute && micRoute.shaper) micRoute.shaper.curve = buildDistortionCurve(Number(micDistortionSlider.value) || 0);
+    });
+
+    micEchoSlider.addEventListener('input', () => {
+      micEchoDisplay.textContent = Number(micEchoSlider.value).toFixed(2);
+      if (micRoute && micRoute.echoGain) micRoute.echoGain.gain.value = Number(micEchoSlider.value) || 0;
+    });
+
+    document.getElementById('micEnableBtn').addEventListener('click', startMicRouting);
+    document.getElementById('micStopBtn').addEventListener('click', stopMicRouting);
+    document.getElementById('micListBtn').addEventListener('click', refreshMicrophoneDevices);
 
     const renderTokenList = (data) => {
       if (!data || !Array.isArray(data.tokens)) {
@@ -824,15 +1089,16 @@ const server = http.createServer(async (req, res) => {
     document.getElementById('joinBtn').addEventListener('click', async () => {
       const channelId = channelInput.value.trim();
       const guildId = guildInput.value.trim();
+      const count = Number(joinCountInput.value || 1);
       if (!channelId) {
         statusEl.textContent = 'Channel ID is required to join.';
         return;
       }
-      statusEl.textContent = 'Joining bots to channel...';
+      statusEl.textContent = 'Joining selected bots to channel...';
       const res = await fetch('/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId, guildId })
+        body: JSON.stringify({ channelId, guildId, count })
       });
       const data = await res.json();
       statusEl.textContent = data.status || 'Join requested';
@@ -935,6 +1201,7 @@ const server = http.createServer(async (req, res) => {
     document.getElementById('deafAllBtn').addEventListener('click', () => fetchWithStatus('/audio/deafen'));
     document.getElementById('undeafAllBtn').addEventListener('click', () => fetchWithStatus('/audio/undeafen'));
 
+    refreshMicrophoneDevices();
     fetchTokens();
     fetchStatus();
     setInterval(() => {
@@ -1203,6 +1470,8 @@ const server = http.createServer(async (req, res) => {
       const body = await parseJSONBody(req);
       const targetChannelId = body.channelId || body.channel || null;
       const targetGuildId = body.guildId || body.guild || null;
+      const requestedCount = Number(body.count || body.quantity || body.limit || bots.length);
+      const joinCount = Number.isFinite(requestedCount) && requestedCount > 0 ? Math.min(Math.floor(requestedCount), bots.length) : bots.length;
       if (!targetChannelId) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'channelId is required' }));
@@ -1210,8 +1479,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       const results = [];
-      for (let i = 0; i < bots.length; i++) {
-        const bot = bots[i];
+      const targetBots = bots.slice(0, joinCount);
+      for (let i = 0; i < targetBots.length; i++) {
+        const bot = targetBots[i];
         if (bot.status !== 'ready') {
           results.push({
             bot: i + 1,
@@ -1240,7 +1510,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'joining', channelId: targetChannelId, guildId: targetGuildId, joinedAll: results.every((item) => item.connected), results }));
+      res.end(JSON.stringify({ status: 'joining', channelId: targetChannelId, guildId: targetGuildId, joinCount, joinedAll: results.every((item) => item.connected), results }));
     } catch (error) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
@@ -1260,6 +1530,17 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'not found' }));
+});
+
+server.on('upgrade', (request, socket, head) => {
+  if (request.url === '/mic') {
+    micWss.handleUpgrade(request, socket, head, (ws) => {
+      attachMicSocket(ws);
+    });
+    return;
+  }
+
+  socket.destroy();
 });
 
 server.listen(port, host, () => {
